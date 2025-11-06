@@ -1,0 +1,133 @@
+{
+  "Comment": "Real-Time Clearing Saga: Orchestrates the atomic debit, interbank transfer mock, and final credit.",
+  "StartAt": "IdempotencyCheck",
+  "States": {
+    "IdempotencyCheck": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "Payload.$": "$",
+        "FunctionName": "${Idempotency_Check_Lambda_ARN}"
+      },
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "IdempotencyKeyConflict"
+          ],
+          "Next": "DuplicateTransaction"
+        },
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "TransactionFailed"
+        }
+      ],
+      "Next": "DebitPayerWallet"
+    },
+    
+    "DuplicateTransaction": {
+        "Type": "Succeed"
+    },
+    
+    "DebitPayerWallet": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "Payload.$": "$",
+        "FunctionName": "${Debit_Wallet_Lambda_ARN}"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "InternalError"
+          ],
+          "IntervalSeconds": 3,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "InsufficientFunds"
+          ],
+          "Next": "PublishFailedEvent"
+        },
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "TransactionFailed"
+        }
+      ],
+      "Next": "MockInterbankTransfer"
+    },
+    
+    "MockInterbankTransfer": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "Payload.$": "$",
+        "FunctionName": "${Transfer_Mock_Lambda_ARN}"
+      },
+      "Next": "CreditBeneficiaryWallet"
+    },
+    
+    "CreditBeneficiaryWallet": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "Payload.$": "$",
+        "FunctionName": "${Credit_Wallet_Lambda_ARN}"
+      },
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "ReconciliationRequired"
+        }
+      ],
+      "Next": "PublishSuccessEvent"
+    },
+    
+    "PublishSuccessEvent": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${SNS_Topic_ARN}",
+        "Message": {
+          "payment_status": "SETTLED_SUCCESS",
+          "data.$": "$"
+        }
+      },
+      "End": true
+    },
+    
+    "PublishFailedEvent": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${SNS_Topic_ARN}",
+        "Message": {
+          "payment_status": "DEBIT_FAILED",
+          "data.$": "$"
+        }
+      },
+      "End": true
+    },
+    
+    "TransactionFailed": {
+      "Type": "Fail",
+      "Cause": "Transaction processing failed due to unexpected error.",
+      "Error": "ClearingFailure"
+    },
+
+    "ReconciliationRequired": {
+        "Type": "Fail",
+        "Cause": "Payer Debited, but Beneficiary Credit failed. Manual reconciliation required.",
+        "Error": "CreditFailure"
+    }
+  }
+}

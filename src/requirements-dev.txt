@@ -1,0 +1,4 @@
+pytest
+moto[all]  # For mocking AWS services
+boto3
+python-decouple # Optional: for local environment vars
