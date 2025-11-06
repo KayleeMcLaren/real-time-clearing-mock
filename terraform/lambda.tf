@@ -129,7 +129,7 @@ resource "aws_lambda_function" "transfer_mock" {
   memory_size      = 128
   
   filename         = data.archive_file.clearing_lambdas_zip.output_path
-  source_code_hash = data.archive_file.clearing_lambdas_zip.output_base64sha255
+  source_code_hash = data.archive_file.clearing_lambdas_zip.output_base64sha256
   
   environment {
     variables = {
