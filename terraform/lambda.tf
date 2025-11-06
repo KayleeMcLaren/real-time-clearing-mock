@@ -1,6 +1,6 @@
 # real-time-clearing-mock/terraform/lambda.tf
 
-# Data source to get the current AWS Account ID for ARN construction (if not already in step_function.tf)
+# Data source to get the current AWS Account ID for ARN construction
 data "aws_caller_identity" "current" {} 
 
 # --- IAM Role for Lambda Execution ---
@@ -41,17 +41,21 @@ resource "aws_iam_policy" "dynamodb_access_policy" {
           "dynamodb:PutItem",
           "dynamodb:UpdateItem",
           "dynamodb:Query",
-          # Crucial for atomic debit/credit:
-          "dynamodb:TransactWriteItems", 
+          "dynamodb:TransactWriteItems",
           "dynamodb:TransactGetItems"
         ],
+        # CRITICAL FIX: The Lambda role must have permission on the EXISTING table's ARN
+        # The ARN of the 'fintech-ecosystem-stg-wallets' table must be added here.
+        # Since this ARN is external, we MUST define it as a string or pass it as a variable.
+        # For now, we assume this policy is only granting permission to the new tables, 
+        # and rely on the execution environment to have permission on the external table.
+        # However, a cleaner solution would be to pass the external ARN as a variable.
         Resource = [
-          aws_dynamodb_table.wallets.arn,
-          aws_dynamodb_table.idempotency.arn
+          "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/fintech-ecosystem-stg-wallets", # Added External ARN
+          aws_dynamodb_table.idempotency.arn,
+          aws_dynamodb_table.wallets.arn # Retained for completeness, although this table is redundant now.
         ]
       },
-      # The Lambda needs to be able to read its own environment variables, 
-      # which contain the table names.
       {
         Effect = "Allow",
         Action = "sqs:SendMessage",
@@ -70,16 +74,14 @@ resource "aws_iam_role_policy_attachment" "dynamodb_attach" {
 data "archive_file" "clearing_lambdas_zip" {
   type        = "zip"
   output_path = "clearing_lambdas_${var.environment}.zip"
-
-  # Archive the entire src/ folder
-  source_dir = "${path.module}/../src"
+  source_dir  = "${path.module}/../src"
 }
 
 # --- 1. Idempotency Check Lambda ---
 resource "aws_lambda_function" "idempotency_check" {
   function_name    = "IdempotencyCheckLambda-${var.environment}"
   role             = aws_iam_role.clearing_lambda_role.arn
-  handler          = "handlers.idempotency_check.handler.handler" # Path to handler.py
+  handler          = "handlers.idempotency_check.handler.handler"
   runtime          = "python3.12"
   timeout          = 15
   memory_size      = 128
@@ -89,7 +91,7 @@ resource "aws_lambda_function" "idempotency_check" {
 
   environment {
     variables = {
-      WALLETS_TABLE_NAME    = aws_dynamodb_table.wallets.name
+      WALLETS_TABLE_NAME    = "fintech-ecosystem-stg-wallets" # FIXED: Added quotes
       IDEMPOTENCY_TABLE_NAME = aws_dynamodb_table.idempotency.name
       AUDIT_QUEUE_URL       = aws_sqs_queue.audit_queue.id
     }
@@ -110,7 +112,7 @@ resource "aws_lambda_function" "debit_wallet" {
 
   environment {
     variables = {
-      WALLETS_TABLE_NAME    = aws_dynamodb_table.wallets.name
+      WALLETS_TABLE_NAME    = "fintech-ecosystem-stg-wallets" # FIXED: Added quotes
       IDEMPOTENCY_TABLE_NAME = aws_dynamodb_table.idempotency.name
       AUDIT_QUEUE_URL       = aws_sqs_queue.audit_queue.id
     }
@@ -127,11 +129,11 @@ resource "aws_lambda_function" "transfer_mock" {
   memory_size      = 128
   
   filename         = data.archive_file.clearing_lambdas_zip.output_path
-  source_code_hash = data.archive_file.clearing_lambdas_zip.output_base64sha256
+  source_code_hash = data.archive_file.clearing_lambdas_zip.output_base64sha255
   
   environment {
     variables = {
-      WALLETS_TABLE_NAME    = aws_dynamodb_table.wallets.name
+      WALLETS_TABLE_NAME    = "fintech-ecosystem-stg-wallets" # FIXED: Added quotes
       IDEMPOTENCY_TABLE_NAME = aws_dynamodb_table.idempotency.name
       AUDIT_QUEUE_URL       = aws_sqs_queue.audit_queue.id
     }
@@ -153,7 +155,7 @@ resource "aws_lambda_function" "credit_wallet" {
 
   environment {
     variables = {
-      WALLETS_TABLE_NAME    = aws_dynamodb_table.wallets.name
+      WALLETS_TABLE_NAME    = "fintech-ecosystem-stg-wallets" # FIXED: Added quotes
       IDEMPOTENCY_TABLE_NAME = aws_dynamodb_table.idempotency.name
       AUDIT_QUEUE_URL       = aws_sqs_queue.audit_queue.id
     }
